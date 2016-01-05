@@ -1,0 +1,491 @@
+//---------------------------------------------------------------------//
+//-   PROGRAMME DRONE V.BETA - @STRIEBIG BENJAMIN::www.error-404.fr   -//
+//---------------------------------------------------------------------//
+/*Composants : 
+ * Carte mere : ARDUINO MEGA 2560 R3
+ * Gyroscope : GY520 (MPU6650 type MEMS)  PIN[VCC->3.3V | GND->GND | SCL->SCL | SDA->SDA | INT-> I/O2] 
+ * Module WIFI : ESP8266
+ * Moteurs : A2212 1000KV type Brushless
+ * Controleurs ESC : HW30A  PIN[ESC1 -> 8 | ESC1 -> 9 | ESC1 -> 10 | ESC1 -> 11]
+ */
+
+/*Librairies :
+ * Servo.h -> Gestion des moteurs
+ * Wire.h -> Utilise par I2Cdev
+ * I2Cdev.h -> Gestion du bus I2C
+ * MPU6050_6Axis_MotionApps20.h -> Librairie du gyroscope
+ */
+//--------------------------------------------------------------------
+
+#include <Servo.h>
+#include "Wire.h"
+#include "I2Cdev.h"
+#include "MPU6050_6Axis_MotionApps20.h"
+#include <LiquidCrystal.h>
+
+//---------------------------------------------------------------------//
+//-                       INTIALISATION   LCD                         -//
+//---------------------------------------------------------------------//
+LiquidCrystal lcd(35, 37, 47, 49, 51, 53);
+
+//---------------------------------------------------------------------//
+//-                    INTIALISATION   MOTEURS                        -//
+//---------------------------------------------------------------------//
+Servo moteur1; // 1er moteur
+Servo moteur2; // 2er moteur
+Servo moteur3; // 3er moteur
+Servo moteur4; // 4er moteur
+
+int moteur1Pin = 8; // commande ESC - moteur1 sur le PIN8
+int moteur2Pin = 9; // commande ESC - moteur1 sur le PIN9
+int moteur3Pin = 10; // commande ESC - moteur1 sur le PIN10
+int moteur4Pin = 11; // commande ESC - moteur1 sur le PIN11
+
+int minPulseRate= 1000;
+int maxPulseRate= 2000;
+
+//---------------------------------------------------------------------//
+//-                    INTIALISATION   GYROSCOPE                      -//
+//---------------------------------------------------------------------//
+const int LED=3; //declaration constante de broche 
+
+const int testLacet=49; //declaration constante de broche 
+const int testTangage=51; //declaration constante de broche 
+const int testRoulis=53; //declaration constante de broche 
+
+MPU6050 mpu;
+
+#define OUTPUT_READABLE_YAWPITCHROLL
+#define LED_PIN 13
+bool blinkState = false;
+
+  int lacetVal;
+  int tangageVal;
+  int roulisVal;
+
+int filtreTabLacet[40];
+int filtreTabTangage[40];
+int filtreTabRoulis[40];
+
+
+// MPU control/status vars
+bool dmpReady = false;  // set true if DMP init was successful
+uint8_t mpuIntStatus;   // holds actual interrupt status byte from MPU
+uint8_t devStatus;      // return status after each device operation (0 = success, !0 = error)
+uint16_t packetSize;    // expected DMP packet size (default is 42 bytes)
+uint16_t fifoCount;     // count of all bytes currently in FIFO
+uint8_t fifoBuffer[64]; // FIFO storage buffer
+
+// orientation/motion vars
+Quaternion q;           // [w, x, y, z]         quaternion container
+VectorInt16 aa;         // [x, y, z]            accel sensor measurements
+VectorInt16 aaReal;     // [x, y, z]            gravity-free accel sensor measurements
+VectorInt16 aaWorld;    // [x, y, z]            world-frame accel sensor measurements
+VectorFloat gravity;    // [x, y, z]            gravity vector
+float euler[3];         // [psi, theta, phi]    Euler angle container
+float ypr[3];           // [yaw, pitch, roll]   yaw/pitch/roll container and gravity vector
+
+// packet structure for InvenSense teapot demo
+uint8_t teapotPacket[14] = { '$', 0x02, 0,0, 0,0, 0,0, 0,0, 0x00, 0x00, '\r', '\n' };
+
+
+volatile bool mpuInterrupt = false;     // indicates whether MPU interrupt pin has gone high
+void dmpDataReady() {
+    mpuInterrupt = true;
+}
+
+
+
+
+
+
+//---------------------------------------------------------------------//
+//-                            INTIALISATION                          -//
+//---------------------------------------------------------------------//
+void setup() 
+{
+
+  /*LCD*/
+  lcd.begin(16, 2);
+  lcd.print(" INITIALISATION ");
+  lcd.setCursor(0, 1);
+  lcd.print("****************+");
+  /****/
+
+ delay(4000);
+ startARMtheESC(); //Initialisation des moteurs
+ delay(4000);
+
+pinMode(LED, OUTPUT); //met la broche en sortie 
+
+pinMode(testLacet, OUTPUT);
+pinMode(testTangage, OUTPUT);
+pinMode(testRoulis, OUTPUT);
+digitalWrite(testLacet,LOW);
+digitalWrite(testTangage,LOW);
+digitalWrite(testRoulis,LOW);
+
+ // join I2C bus (I2Cdev library doesn't do this automatically)
+    Wire.begin();
+    TWBR = 12; // set 400kHz mode @ 16MHz CPU or 200kHz mode @ 8MHz CPU
+    
+    // initialize serial communication
+    // (115200 chosen because it is required for Teapot Demo output, but it's
+    // really up to you depending on your project)
+    Serial.begin(115200);
+    //Serial.begin(9600);
+    //while (!Serial); // wait for Leonardo enumeration, others continue immediately
+
+    // NOTE: 8MHz or slower host processors, like the Teensy @ 3.3v or Ardunio
+    // Pro Mini running at 3.3v, cannot handle this baud rate reliably due to
+    // the baud timing being too misaligned with processor ticks. You must use
+    // 38400 or slower in these cases, or use some kind of external separate
+    // crystal solution for the UART timer.
+
+    // initialize device
+    Serial.println(F("Initializing I2C devices..."));
+    mpu.initialize();
+
+    // verify connection
+    Serial.println(F("Testing device connections..."));
+    Serial.println(mpu.testConnection() ? F("MPU6050 connection successful") : F("MPU6050 connection failed"));
+     
+     mpu.testConnection() ? digitalWrite(LED,HIGH) : digitalWrite(LED,LOW);
+
+    // wait for ready
+   /* Serial.println(F("\nSend any character to begin DMP programming and demo: "));
+    while (Serial.available() && Serial.read()); // empty buffer
+    while (!Serial.available());                 // wait for data
+    while (Serial.available() && Serial.read()); // empty buffer again*/
+
+    // load and configure the DMP
+    Serial.println(F("Initializing DMP..."));
+    devStatus = mpu.dmpInitialize();
+    
+    // make sure it worked (returns 0 if so)
+    if (devStatus == 0) {
+        // turn on the DMP, now that it's ready
+        Serial.println(F("Enabling DMP..."));
+        mpu.setDMPEnabled(true);
+
+        // enable Arduino interrupt detection
+        Serial.println(F("Enabling interrupt detection (Arduino external interrupt 0)..."));
+        attachInterrupt(0, dmpDataReady, RISING);
+        mpuIntStatus = mpu.getIntStatus();
+
+        // set our DMP Ready flag so the main loop() function knows it's okay to use it
+        Serial.println(F("DMP ready! Waiting for first interrupt..."));
+        dmpReady = true;
+
+        // get expected DMP packet size for later comparison
+        packetSize = mpu.dmpGetFIFOPacketSize();
+    } else {
+        // ERROR!
+        // 1 = initial memory load failed
+        // 2 = DMP configuration updates failed
+        // (if it's going to break, usually the code will be 1)
+        Serial.print(F("DMP Initialization failed (code "));
+        Serial.print(devStatus);
+        Serial.println(F(")"));
+    }
+
+    // configure LED for output
+    pinMode(LED_PIN, OUTPUT);
+
+   
+}
+ 
+
+
+
+//---------------------------------------------------------------------//
+//-                            GYROSCOPE                              -//
+//---------------------------------------------------------------------//
+void Filtre()
+{
+/*int i(0);
+int o(0);
+
+int l(0);
+int t(0);
+int r(0);
+
+int totalSommeLacet(0);
+int totalSommeTangage(0);
+int totalSommeRoulis(0);
+
+
+  while(i<39)
+  {
+    filtreTabLacet[l]=filtreTabLacet[l++];
+    filtreTabTangage[t]=filtreTabTangage[t++];
+    filtreTabRoulis[r]=filtreTabRoulis[r++];
+    l=l+1;
+    t=t+1;
+    r=r+1;
+    filtreTabLacet[39]=lacetVal;
+    filtreTabTangage[39]=tangageVal;
+    filtreTabRoulis[39]=roulisVal;
+
+    while(o<40)
+    {
+       lacetVal= lacetVal + filtreTabLacet[l];
+       tangageVal= tangageVal + filtreTabTangage[t];
+       roulisVal= roulisVal + filtreTabRoulis[r];
+        //calcul de la moyenne
+    }
+
+  }
+*/
+}
+
+
+
+void GyroValues(/*int& lacet, int& tangage, int& roulis*/)  
+{
+    
+  // if programming failed, don't try to do anything
+    if (!dmpReady) return;
+
+    // wait for MPU interrupt or extra packet(s) available
+    while (!mpuInterrupt && fifoCount < packetSize) {
+        // other program behavior stuff here
+        // .
+        // .
+        // .
+        // if you are really paranoid you can frequently test in between other
+        // stuff to see if mpuInterrupt is true, and if so, "break;" from the
+        // while() loop to immediately process the MPU data
+        // .
+        // .
+        // .
+    }
+
+    // reset interrupt flag and get INT_STATUS byte
+    mpuInterrupt = false;
+    mpuIntStatus = mpu.getIntStatus();
+
+    // get current FIFO count
+    fifoCount = mpu.getFIFOCount();
+
+    // check for overflow (this should never happen unless our code is too inefficient)
+    if ((mpuIntStatus & 0x10) || fifoCount == 1024) {
+        // reset so we can continue cleanly
+        mpu.resetFIFO();
+        Serial.println(F("FIFO overflow!"));
+
+    // otherwise, check for DMP data ready interrupt (this should happen frequently)
+    } else if (mpuIntStatus & 0x02) {
+        // wait for correct available data length, should be a VERY short wait
+        while (fifoCount < packetSize) fifoCount = mpu.getFIFOCount();
+
+        // read a packet from FIFO
+        mpu.getFIFOBytes(fifoBuffer, packetSize);
+        
+        // track FIFO count here in case there is > 1 packet available
+        // (this lets us immediately read more without waiting for an interrupt)
+        fifoCount -= packetSize;
+
+        #ifdef OUTPUT_READABLE_QUATERNION
+            // display quaternion values in easy matrix form: w x y z
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            Serial.print("quat\t");
+            Serial.print(q.w);
+            Serial.print("\t");
+            Serial.print(q.x);
+            Serial.print("\t");
+            Serial.print(q.y);
+            Serial.print("\t");
+            Serial.println(q.z);
+        #endif
+
+        #ifdef OUTPUT_READABLE_EULER
+            // display Euler angles in degrees
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            mpu.dmpGetEuler(euler, &q);
+            Serial.print("euler\t");
+            Serial.print(euler[0] * 180/M_PI);
+            Serial.print("\t");
+            Serial.print(euler[1] * 180/M_PI);
+            Serial.print("\t");
+            Serial.println(euler[2] * 180/M_PI);
+        #endif
+
+        #ifdef OUTPUT_READABLE_YAWPITCHROLL
+            // display Euler angles in degrees
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            mpu.dmpGetGravity(&gravity, &q);
+            mpu.dmpGetYawPitchRoll(ypr, &q, &gravity);
+           /* Serial.println("*******NEW VALUES*******");
+            Serial.print("LACET:: \t");
+            Serial.println(ypr[0] * 180/M_PI);
+            Serial.print("TANGAGE:: \t");
+            Serial.println(ypr[1] * 180/M_PI);
+            Serial.print("ROULIS:: \t");
+            Serial.println(ypr[2] * 180/M_PI); 
+            Serial.print("\t");
+                    delay(1000),*/
+
+            lacetVal=(ypr[0] * 180/M_PI);
+            tangageVal=(ypr[1] * 180/M_PI);
+            roulisVal=(ypr[2] * 180/M_PI);
+        #endif
+
+        #ifdef OUTPUT_READABLE_REALACCEL
+            // display real acceleration, adjusted to remove gravity
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            mpu.dmpGetAccel(&aa, fifoBuffer);
+            mpu.dmpGetGravity(&gravity, &q);
+            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
+            Serial.print("areal\t");
+            Serial.print(aaReal.x);
+            Serial.print("\t");
+            Serial.print(aaReal.y);
+            Serial.print("\t");
+            Serial.println(aaReal.z);
+        #endif
+
+        #ifdef OUTPUT_READABLE_WORLDACCEL
+            // display initial world-frame acceleration, adjusted to remove gravity
+            // and rotated based on known orientation from quaternion
+            mpu.dmpGetQuaternion(&q, fifoBuffer);
+            mpu.dmpGetAccel(&aa, fifoBuffer);
+            mpu.dmpGetGravity(&gravity, &q);
+            mpu.dmpGetLinearAccel(&aaReal, &aa, &gravity);
+            mpu.dmpGetLinearAccelInWorld(&aaWorld, &aaReal, &q);
+            Serial.print("aworld\t");
+            Serial.print(aaWorld.x);
+            Serial.print("\t");
+            Serial.print(aaWorld.y);
+            Serial.print("\t");
+            Serial.println(aaWorld.z);
+        #endif
+    
+        #ifdef OUTPUT_TEAPOT
+            // display quaternion values in InvenSense Teapot demo format:
+            teapotPacket[2] = fifoBuffer[0];
+            teapotPacket[3] = fifoBuffer[1];
+            teapotPacket[4] = fifoBuffer[4];
+            teapotPacket[5] = fifoBuffer[5];
+            teapotPacket[6] = fifoBuffer[8];
+            teapotPacket[7] = fifoBuffer[9];
+            teapotPacket[8] = fifoBuffer[12];
+            teapotPacket[9] = fifoBuffer[13];
+            Serial.write(teapotPacket, 14);
+            teapotPacket[11]++; // packetCount, loops at 0xFF on purpose
+        #endif
+
+        // blink LED to indicate activity
+        blinkState = !blinkState;
+        digitalWrite(LED_PIN, blinkState);
+
+    }
+}
+
+
+//---------------------------------------------------------------------//
+//-                             MOTEURS                               -//
+//---------------------------------------------------------------------//
+void  startARMtheESC() // ARMEMENT DES MOTEURS 
+{
+  moteur1.attach(moteur1Pin, minPulseRate, maxPulseRate);
+  moteur2.attach(moteur2Pin, minPulseRate, maxPulseRate);
+  moteur3.attach(moteur3Pin, minPulseRate, maxPulseRate);
+  moteur4.attach(moteur4Pin, minPulseRate, maxPulseRate);
+  
+  emissionPuissanceESC(0,0,0,0);
+}
+
+void emissionPuissanceESC(int vitesseM1,int vitesseM2,int vitesseM3,int vitesseM4) //On envoi la vitesse a l'ESC
+{
+  moteur1.write(vitesseM1);
+  moteur2.write(vitesseM2);
+  moteur3.write(vitesseM3);
+  moteur4.write(vitesseM4);
+}
+
+
+
+
+//---------------------------------------------------------------------//
+//-                                MAIN                               -//
+//---------------------------------------------------------------------//
+int puissanceM1=0;
+int puissanceM2=0;
+int puissanceM3=0;
+int puissanceM4=0;
+
+void loop() 
+{  
+
+
+        /*FIN LCD*/
+         lcd.clear();
+         lcd.setCursor(0,0);
+         lcd.print("L");
+         lcd.print(lacetVal);
+         lcd.print(" T");
+         lcd.print(tangageVal);
+         lcd.print(" R");
+         lcd.print(roulisVal);
+         lcd.setCursor(0,1);
+         lcd.print("A");
+         lcd.print(puissanceM1);
+         lcd.print("B");
+         lcd.print(puissanceM2);
+         lcd.print("C");
+         lcd.print(puissanceM3);
+         lcd.print("D");
+         lcd.print(puissanceM4);
+        /*********/
+
+        
+
+GyroValues(); //Lecture du gyroscope -180° à +180°
+ //Filtre(); //On actualise les valeur en les lissant via filtre   
+
+    //Affichage dans le moniteur serie :
+   Serial.print("LACET:: \t");
+   Serial.print(lacetVal);
+   Serial.print("\t");
+   Serial.print("TANGAGE:: \t");
+   Serial.print(tangageVal);
+   Serial.print("\t");
+   Serial.print("ROULIS:: \t");
+   Serial.print(roulisVal);
+   Serial.println("\t");
+   
+  if(lacetVal>0&&lacetVal<180)
+  {
+    digitalWrite(testLacet,HIGH);
+  }
+  else
+  {
+    digitalWrite(testLacet,LOW);
+  }
+  
+  if(tangageVal>0&&tangageVal<180)
+  {
+   digitalWrite(testTangage,HIGH);
+   puissanceM1=tangageVal+20;
+  }
+    else
+  {
+    digitalWrite(testTangage,LOW);
+    puissanceM1=0;
+  }
+  
+  if(roulisVal>0&&roulisVal<180)
+  {
+    digitalWrite(testRoulis,HIGH);
+  }
+    else
+  {
+    digitalWrite(testRoulis,LOW);
+  }
+
+emissionPuissanceESC(puissanceM1,puissanceM2,puissanceM3,puissanceM4); //On envoi la puissance
+
+}
+
+
